@@ -26,6 +26,7 @@ if HAS_TORCH:
             self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, padding=padding, dilation=dilation)
             self.bn2 = nn.BatchNorm1d(out_channels)
             
+            
             self.residual = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
