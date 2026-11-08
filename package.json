@@ -1,0 +1,25 @@
+{
+  "name": "aimpoint-ai-desktop",
+  "version": "1.0.0",
+  "description": "AimPointAI - Real-Time Detection of Basketball Shooting Mistakes & Corrective Coaching Desktop Application",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-packager . AimPointAI --platform=win32 --arch=x64 --out=dist --overwrite",
+    "dist": "electron-builder --win"
+  },
+  "keywords": [
+    "basketball",
+    "biomechanics",
+    "pose-estimation",
+    "deep-learning",
+    "electron",
+    "desktop"
+  ],
+  "author": "TS Kirindegamaarachchi (KDU 2026)",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-packager": "^17.1.2"
+  }
+}
