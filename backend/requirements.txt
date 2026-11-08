@@ -1,0 +1,14 @@
+# AimPointAI - Core Production Dependencies
+# Aligned with 5-Tier Mobile-Responsive & Cloud-Edge Architecture
+
+fastapi>=0.110.0
+uvicorn>=0.28.0
+pydantic>=2.0.0
+numpy>=1.24.0
+python-multipart>=0.0.9
+
+# Optional dependencies for GPU training / scientific analysis
+# scipy>=1.10.0
+# torch>=2.0.0
+# mediapipe>=0.10.0
+# scikit-learn>=1.3.0

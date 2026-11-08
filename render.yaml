@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: aimpoint-ai
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: python start_server.py
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.8
+
