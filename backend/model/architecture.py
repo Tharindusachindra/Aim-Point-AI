@@ -5,9 +5,9 @@ from typing import Dict, Any, Tuple, List, Optional
 
 # Check if PyTorch is available in current environment; provide type-safe fallbacks if absent
 try:
-    import torch
-    import torch.nn as nn
-    import torch.nn.functional as F
+    import torch  # type: ignore
+    import torch.nn as nn  # type: ignore
+    import torch.nn.functional as F  # type: ignore
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False

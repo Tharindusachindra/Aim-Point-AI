@@ -25,10 +25,16 @@ backend_dir = os.path.dirname(os.path.abspath(__file__))
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
-from pose.kinematic_calculator import KinematicFeatureExtractor, FAULT_CLASSES
-from model.architecture import classifier_engine
-from ontology.pedagogical_engine import pedagogical_engine
-from database.database_service import db_service
+try:
+    from backend.pose.kinematic_calculator import KinematicFeatureExtractor, FAULT_CLASSES
+    from backend.model.architecture import classifier_engine
+    from backend.ontology.pedagogical_engine import pedagogical_engine
+    from backend.database.database_service import db_service
+except ImportError:
+    from pose.kinematic_calculator import KinematicFeatureExtractor, FAULT_CLASSES  # type: ignore
+    from model.architecture import classifier_engine  # type: ignore
+    from ontology.pedagogical_engine import pedagogical_engine  # type: ignore
+    from database.database_service import db_service  # type: ignore
 
 app = FastAPI(
     title="AimPointAI Biomechanical Analysis API",
