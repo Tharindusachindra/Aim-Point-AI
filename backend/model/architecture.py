@@ -3,7 +3,7 @@
 import numpy as np
 from typing import Dict, Any, Tuple, List, Optional
 
-# Check if PyTorch is available in current environment
+# Check if PyTorch is available in current environment; provide type-safe fallbacks if absent
 try:
     import torch
     import torch.nn as nn
@@ -12,93 +12,108 @@ try:
 except ImportError:
     HAS_TORCH = False
 
-if HAS_TORCH:
-    class ResidualTemporalBlockPyTorch(nn.Module):
-        """
-        1D Residual Temporal Convolutional Block with causal padding & skip connection.
-        (Thesis Section 3.4.2 & Appendix D)
-        """
-        def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3, dilation: int = 1):
-            super().__init__()
-            padding = (kernel_size - 1) * dilation // 2
-            self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, padding=padding, dilation=dilation)
-            self.bn1 = nn.BatchNorm1d(out_channels)
-            self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, padding=padding, dilation=dilation)
-            self.bn2 = nn.BatchNorm1d(out_channels)
-            self.dropout = nn.Dropout(0.2)
-            self.residual = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+    class _MockModule:
+        def __init__(self, *args, **kwargs): pass
+        def __call__(self, *args, **kwargs): return self
+        def forward(self, *args, **kwargs): return args[0] if args else None
+        def permute(self, *args, **kwargs): return self
 
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            res = self.residual(x)
-            out = F.relu(self.bn1(self.conv1(x)))
-            out = self.dropout(out)
-            out = self.bn2(self.conv2(out))
-            out = self.dropout(out)
-            return F.relu(out + res)
+    class _MockNN:
+        Module = _MockModule
+        Conv1d = BatchNorm1d = Dropout = Identity = Linear = LayerNorm = GELU = ReLU = Sequential = LSTM = MultiheadAttention = MaxPool1d = _MockModule
 
-    class AimPointDeepModelPyTorch(nn.Module):
-        """
-        Complete Hybrid Neural Network Topology:
-        Res-TCN -> MaxPool -> BiLSTM -> Multi-Head Self-Attention -> Global Average Pooling -> Dense Head
-        (Thesis Section 3.4.1 - 3.4.4 & Appendix D.1)
-        """
-        def __init__(self, input_dim: int = 12, num_classes: int = 5):
-            super().__init__()
-            # 1. Res-TCN Backbone
-            self.tcn = nn.Sequential(
-                ResidualTemporalBlockPyTorch(input_dim, 32, kernel_size=3, dilation=1),
-                nn.MaxPool1d(2),
-                ResidualTemporalBlockPyTorch(32, 64, kernel_size=3, dilation=2),
-                nn.Dropout(0.2)
-            )
-            
-            # 2. Deep Bidirectional Sequential Encoder
-            self.bilstm = nn.LSTM(
-                input_size=64,
-                hidden_size=64,
-                num_layers=2,
-                batch_first=True,
-                bidirectional=True,
-                dropout=0.2
-            )
-            
-            # 3. Multi-Head Scaled Dot-Product Attention (embed_dim=128, num_heads=4)
-            self.attn = nn.MultiheadAttention(embed_dim=128, num_heads=4, batch_first=True)
-            self.layer_norm = nn.LayerNorm(128)
-            
-            # 4. Dense Classification Head
-            self.classifier = nn.Sequential(
-                nn.Linear(128, 64),
-                nn.GELU(),
-                nn.Dropout(0.3),
-                nn.Linear(64, num_classes)
-            )
+    class _MockF:
+        @staticmethod
+        def relu(x, *args, **kwargs):
+            return x
 
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            # Input shape: (Batch, Seq, Feat) -> Permute for 1D Conv: (Batch, Feat, Seq)
-            x = x.permute(0, 2, 1)
-            x = self.tcn(x)
-            # Permute back: (Batch, Seq_reduced, 64)
-            x = x.permute(0, 2, 1)
-            
-            lstm_out, _ = self.bilstm(x)
-            attn_out, _ = self.attn(lstm_out, lstm_out, lstm_out)
-            norm_attn = self.layer_norm(attn_out + lstm_out)
-            
-            # Global Temporal Average Pooling (Thesis Section 3.4.4)
-            context_vector = torch.mean(norm_attn, dim=1)
-            logits = self.classifier(context_vector)
-            return logits
-else:
-    class ResidualTemporalBlockPyTorch:  # type: ignore
-        """Fallback definition when PyTorch is not installed in the edge runtime."""
-        def __init__(self, *args, **kwargs):
-            pass
+    class _MockTorch:
+        Tensor = Any
+        @staticmethod
+        def mean(x, *args, **kwargs):
+            return x
 
-    class AimPointDeepModelPyTorch:  # type: ignore
-        """Fallback definition when PyTorch is not installed in the edge runtime."""
-        def __init__(self, *args, **kwargs):
-            pass
+    torch = _MockTorch()  # type: ignore
+    nn = _MockNN()        # type: ignore
+    F = _MockF()          # type: ignore
+
+class ResidualTemporalBlockPyTorch(nn.Module):
+    """
+    1D Residual Temporal Convolutional Block with causal padding & skip connection.
+    (Thesis Section 3.4.2 & Appendix D)
+    """
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3, dilation: int = 1):
+        super().__init__()
+        padding = (kernel_size - 1) * dilation // 2
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, padding=padding, dilation=dilation)
+        self.bn1 = nn.BatchNorm1d(out_channels)
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, padding=padding, dilation=dilation)
+        self.bn2 = nn.BatchNorm1d(out_channels)
+        self.dropout = nn.Dropout(0.2)
+        self.residual = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+
+    def forward(self, x: Any) -> Any:
+        res = self.residual(x)
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.dropout(out)
+        out = self.bn2(self.conv2(out))
+        out = self.dropout(out)
+        return F.relu(out + res)
+
+
+class AimPointDeepModelPyTorch(nn.Module):
+    """
+    Complete Hybrid Neural Network Topology:
+    Res-TCN -> MaxPool -> BiLSTM -> Multi-Head Self-Attention -> Global Average Pooling -> Dense Head
+    (Thesis Section 3.4.1 - 3.4.4 & Appendix D.1)
+    """
+    def __init__(self, input_dim: int = 12, num_classes: int = 5):
+        super().__init__()
+        # 1. Res-TCN Backbone
+        self.tcn = nn.Sequential(
+            ResidualTemporalBlockPyTorch(input_dim, 32, kernel_size=3, dilation=1),
+            nn.MaxPool1d(2),
+            ResidualTemporalBlockPyTorch(32, 64, kernel_size=3, dilation=2),
+            nn.Dropout(0.2)
+        )
+        
+        # 2. Deep Bidirectional Sequential Encoder
+        self.bilstm = nn.LSTM(
+            input_size=64,
+            hidden_size=64,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+            dropout=0.2
+        )
+        
+        # 3. Multi-Head Scaled Dot-Product Attention (embed_dim=128, num_heads=4)
+        self.attn = nn.MultiheadAttention(embed_dim=128, num_heads=4, batch_first=True)
+        self.layer_norm = nn.LayerNorm(128)
+        
+        # 4. Dense Classification Head
+        self.classifier = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(64, num_classes)
+        )
+
+    def forward(self, x: Any) -> Any:
+        # Input shape: (Batch, Seq, Feat) -> Permute for 1D Conv: (Batch, Feat, Seq)
+        x = x.permute(0, 2, 1)
+        x = self.tcn(x)
+        # Permute back: (Batch, Seq_reduced, 64)
+        x = x.permute(0, 2, 1)
+        
+        lstm_out, _ = self.bilstm(x)
+        attn_out, _ = self.attn(lstm_out, lstm_out, lstm_out)
+        norm_attn = self.layer_norm(attn_out + lstm_out)
+        
+        # Global Temporal Average Pooling (Thesis Section 3.4.4)
+        context_vector = torch.mean(norm_attn, dim=1)
+        logits = self.classifier(context_vector)
+        return logits
 
 
 class NumPyInferenceEngine:

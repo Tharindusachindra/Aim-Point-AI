@@ -82,6 +82,7 @@ def health_check():
     }
 
 @app.post("/api/analyze-shot")
+@app.post("/api/predict")
 def analyze_shot(
     video: Optional[UploadFile] = File(None),
     athlete_id: str = Form("ATH-001"),
