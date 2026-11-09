@@ -12,3 +12,4 @@ if %errorlevel% neq 0 (
 REM 2. Launch Standalone Native Window (Frameless Desktop App Mode)
 start msedge --app=http://localhost:8080 --window-size=1440,920 --app-id=AimPointAI
 exit
+

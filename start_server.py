@@ -22,7 +22,7 @@ def is_port_available(port: int) -> bool:
         except OSError:
             return False
 
-def get_free_port(preferred_ports=[8000, 8080, 8008, 5000]) -> int:
+def get_free_port(preferred_ports=[8080, 8000, 8008, 5000]) -> int:
     for p in preferred_ports:
         if is_port_available(p):
             return p

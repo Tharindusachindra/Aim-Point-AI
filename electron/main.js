@@ -191,3 +191,4 @@ app.on('window-all-closed', () => {
   cleanupPython();
   if (process.platform !== 'darwin') app.quit();
 });
+

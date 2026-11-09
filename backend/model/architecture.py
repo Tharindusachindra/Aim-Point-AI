@@ -25,14 +25,15 @@ if HAS_TORCH:
             self.bn1 = nn.BatchNorm1d(out_channels)
             self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, padding=padding, dilation=dilation)
             self.bn2 = nn.BatchNorm1d(out_channels)
-            
-            
+            self.dropout = nn.Dropout(0.2)
             self.residual = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             res = self.residual(x)
             out = F.relu(self.bn1(self.conv1(x)))
+            out = self.dropout(out)
             out = self.bn2(self.conv2(out))
+            out = self.dropout(out)
             return F.relu(out + res)
 
     class AimPointDeepModelPyTorch(nn.Module):
@@ -88,6 +89,16 @@ if HAS_TORCH:
             context_vector = torch.mean(norm_attn, dim=1)
             logits = self.classifier(context_vector)
             return logits
+else:
+    class ResidualTemporalBlockPyTorch:  # type: ignore
+        """Fallback definition when PyTorch is not installed in the edge runtime."""
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class AimPointDeepModelPyTorch:  # type: ignore
+        """Fallback definition when PyTorch is not installed in the edge runtime."""
+        def __init__(self, *args, **kwargs):
+            pass
 
 
 class NumPyInferenceEngine:

@@ -9,3 +9,4 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close')
 });
+

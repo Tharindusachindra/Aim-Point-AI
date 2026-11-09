@@ -21,3 +21,4 @@ start "" npx electron .
 
 echo.
 echo AimPointAI Desktop App launched successfully.
+
