@@ -6,7 +6,15 @@ Starts the FastAPI Asynchronous Backend & Serves Commercial Modern Frontend
 import os
 import sys
 import socket
+import asyncio
 import uvicorn
+
+# Suppress benign Windows connection reset traceback in Python 3.12-3.14
+if sys.platform == 'win32':
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
 
 # Ensure backend is on sys.path
 root_dir = os.path.dirname(os.path.abspath(__file__))
