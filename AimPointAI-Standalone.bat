@@ -2,10 +2,17 @@
 title AimPointAI Standalone Desktop App
 cd /d "%~dp0"
 
+set "PY_CMD=python"
+if exist "%~dp0.venv\Scripts\python.exe" (
+    set "PY_CMD=%~dp0.venv\Scripts\python.exe"
+) else if exist "%~dp0venv\Scripts\python.exe" (
+    set "PY_CMD=%~dp0venv\Scripts\python.exe"
+)
+
 REM 1. Ensure Python AI backend is active on port 8080
 netstat -ano | findstr :8080 >nul
 if %errorlevel% neq 0 (
-    start /b python start_server.py
+    start /b "" "%PY_CMD%" start_server.py
     timeout /t 2 /nobreak >nul
 )
 

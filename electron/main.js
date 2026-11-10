@@ -1,8 +1,27 @@
-const { app, BrowserWindow, session, ipcMain } = require('electron');
+const electron = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
 const fs = require('fs');
+
+// Self-healing: If invoked via Node or with ELECTRON_RUN_AS_NODE=1 (e.g. from VS Code terminal),
+// require('electron') resolves to an executable path string. Re-spawn cleanly under Electron runtime.
+if (typeof electron === 'string') {
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const child = spawn(electron, [path.join(__dirname, '..')], {
+    stdio: 'inherit',
+    env,
+    windowsHide: false
+  });
+  child.on('close', (code) => process.exit(code || 0));
+  return;
+}
+
+const { app, BrowserWindow, session, ipcMain } = electron;
+
+// Suppress Chromium GPU disk cache locks on Windows
+app.commandLine.appendSwitch('disable-gpu-cache');
 
 let mainWindow = null;
 let splashWindow = null;
@@ -10,12 +29,26 @@ let pythonProcess = null;
 const BACKEND_PORT = 8080;
 const SERVER_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 
+// Enforce single instance lock to avoid port and cache conflicts
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 // 1. Locate Local Python Executable
 function getPythonPath() {
   const rootDir = path.join(__dirname, '..');
   const possiblePaths = [
     path.join(rootDir, '.venv', 'Scripts', 'python.exe'),
     path.join(rootDir, 'venv', 'Scripts', 'python.exe'),
+    path.join(rootDir, '..', '..', '..', '.venv', 'Scripts', 'python.exe'),
     process.env.PYTHON_PATH,
     'python'
   ];
@@ -56,22 +89,29 @@ function startPythonBackend() {
 }
 
 // 3. Poll Server Until Live
-function waitForServer(callback, maxAttempts = 30) {
+function waitForServer(callback, maxAttempts = 60) {
   let attempts = 0;
+  let resolved = false;
   const interval = setInterval(() => {
     attempts++;
-    const req = http.get(SERVER_URL, (res) => {
-      if (res.statusCode === 200 || res.statusCode === 404) {
+    const req = http.get(`${SERVER_URL}/api/health`, (res) => {
+      if (!resolved && (res.statusCode === 200 || res.statusCode === 404)) {
+        resolved = true;
         clearInterval(interval);
         callback(true);
       }
     });
 
     req.on('error', () => {
-      if (attempts >= maxAttempts) {
+      if (!resolved && attempts >= maxAttempts) {
+        resolved = true;
         clearInterval(interval);
         callback(false);
       }
+    });
+
+    req.setTimeout(1000, () => {
+      req.destroy();
     });
 
     req.end();
@@ -151,18 +191,41 @@ ipcMain.on('window-close', () => { if (mainWindow) mainWindow.close(); });
 // Application Lifecycle
 app.whenReady().then(() => {
   createSplashWindow();
-  startPythonBackend();
 
-  waitForServer((isReady) => {
-    if (isReady) {
-      console.log('[AimPointAI Desktop] Server live! Launching main window...');
+  // Check if server is already running before spawning a new python process
+  const checkReq = http.get(`${SERVER_URL}/api/health`, (res) => {
+    if (res.statusCode === 200) {
+      console.log('[AimPointAI Desktop] Existing Python backend detected on port 8080.');
       createMainWindow();
     } else {
-      console.error('[AimPointAI Desktop] Failed to connect to local server in time.');
-      // Attempt to launch anyway
-      createMainWindow();
+      startPythonBackend();
+      waitForServer((isReady) => {
+        if (isReady) {
+          console.log('[AimPointAI Desktop] Server live! Launching main window...');
+        } else {
+          console.error('[AimPointAI Desktop] Failed to connect to local server in time.');
+        }
+        createMainWindow();
+      });
     }
   });
+
+  checkReq.on('error', () => {
+    startPythonBackend();
+    waitForServer((isReady) => {
+      if (isReady) {
+        console.log('[AimPointAI Desktop] Server live! Launching main window...');
+      } else {
+        console.error('[AimPointAI Desktop] Failed to connect to local server in time.');
+      }
+      createMainWindow();
+    });
+  });
+
+  checkReq.setTimeout(1000, () => {
+    checkReq.destroy();
+  });
+  checkReq.end();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
