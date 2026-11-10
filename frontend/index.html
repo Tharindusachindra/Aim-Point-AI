@@ -375,6 +375,19 @@
             <p class="text-[10px] text-slate-400">Arm fired before leg drive</p>
           </button>
         </div>
+
+        <!-- Direct Download MP4 Sample Videos row -->
+        <div class="flex flex-wrap items-center gap-2 pt-2 px-1">
+          <span class="text-[11px] text-slate-400 font-semibold flex items-center gap-1">
+            <i data-lucide="download" class="w-3.5 h-3.5 text-kinetic-teal"></i>
+            Download MP4 files to test "Upload Phone Video":
+          </span>
+          <a href="/sample_videos/01_Ideal_Form.mp4" download class="px-2.5 py-1 rounded-xl bg-navy-800/90 hover:bg-kinetic-teal/20 hover:text-kinetic-teal border border-white/10 text-slate-300 transition-all font-mono text-[10px] flex items-center space-x-1"><span>📥 01_Ideal.mp4</span></a>
+          <a href="/sample_videos/02_Low_Elbow_Set_Point.mp4" download class="px-2.5 py-1 rounded-xl bg-navy-800/90 hover:bg-kinetic-crimson/20 hover:text-kinetic-coral border border-white/10 text-slate-300 transition-all font-mono text-[10px] flex items-center space-x-1"><span>📥 02_LowElbow.mp4</span></a>
+          <a href="/sample_videos/03_Short_Follow_Through.mp4" download class="px-2.5 py-1 rounded-xl bg-navy-800/90 hover:bg-kinetic-amber/20 hover:text-kinetic-gold border border-white/10 text-slate-300 transition-all font-mono text-[10px] flex items-center space-x-1"><span>📥 03_ShortFollow.mp4</span></a>
+          <a href="/sample_videos/04_Imbalanced_Base.mp4" download class="px-2.5 py-1 rounded-xl bg-navy-800/90 hover:bg-purple-500/20 hover:text-purple-400 border border-white/10 text-slate-300 transition-all font-mono text-[10px] flex items-center space-x-1"><span>📥 04_Imbalanced.mp4</span></a>
+          <a href="/sample_videos/05_Early_Release.mp4" download class="px-2.5 py-1 rounded-xl bg-navy-800/90 hover:bg-kinetic-cyan/20 hover:text-kinetic-cyan border border-white/10 text-slate-300 transition-all font-mono text-[10px] flex items-center space-x-1"><span>📥 05_EarlyRelease.mp4</span></a>
+        </div>
       </div>
 
 
@@ -1158,10 +1171,33 @@
       const sampleNames = [
         "Sample 01: Ideal Swish Shot",
         "Sample 02: Low Elbow Set Point",
-        "Sample 03: Truncated Follow-Through",
+        "Sample 03: Short Follow-Through",
         "Sample 04: Imbalanced Base (Lateral Sway)",
         "Sample 05: Early Release Desynchronization"
       ];
+
+      const sampleFiles = [
+        "/sample_videos/01_Ideal_Form.mp4",
+        "/sample_videos/02_Low_Elbow_Set_Point.mp4",
+        "/sample_videos/03_Short_Follow_Through.mp4",
+        "/sample_videos/04_Imbalanced_Base.mp4",
+        "/sample_videos/05_Early_Release.mp4"
+      ];
+
+      const videoEl = document.getElementById('webcamVideo');
+      if (videoEl) {
+        if (cameraStream) {
+          cameraStream.getTracks().forEach(t => t.stop());
+          cameraStream = null;
+        }
+        videoEl.srcObject = null;
+        videoEl.src = sampleFiles[sampleIdx];
+        videoEl.classList.remove('hidden');
+        videoEl.classList.remove('scale-x-[-1]');
+        videoEl.muted = true;
+        videoEl.loop = true;
+        videoEl.play().catch(() => {});
+      }
 
       const statusPill = document.getElementById('telemetry-status');
       if (statusPill) {
