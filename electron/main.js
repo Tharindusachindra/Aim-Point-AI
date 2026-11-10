@@ -136,33 +136,19 @@ function waitForServer(callback, maxAttempts = 60) {
   }, 500);
 }
 
-// 4. Create Sleek Splash Screen
-function createSplashWindow() {
-  splashWindow = new BrowserWindow({
-    width: 520,
-    height: 360,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    resizable: false,
-    show: true,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true
-    }
-  });
-
-  splashWindow.loadFile(path.join(__dirname, 'splash.html'));
-}
-
-// 5. Create Main Native Desktop Window
+// 4. Create Main Native Desktop Window
 function createMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.focus();
+    return;
+  }
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
     minWidth: 1080,
     minHeight: 720,
-    show: false,
+    show: true,
     backgroundColor: '#070A12',
     title: 'AimPointAI - Basketball Biomechanics & Shooting Form Correction',
     webPreferences: {
@@ -174,43 +160,19 @@ function createMainWindow() {
 
   // Auto-grant Camera / Webcam permissions for seamless monocular capture
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'media' || permission === 'camera' || permission === 'microphone') {
-      callback(true);
-    } else {
-      callback(true);
-    }
+    callback(true);
   });
 
   mainWindow.loadURL(SERVER_URL);
 
-  let showTriggered = false;
-  const revealMainWindow = () => {
-    if (showTriggered) return;
-    showTriggered = true;
-    if (splashWindow && !splashWindow.isDestroyed()) {
-      splashWindow.close();
-      splashWindow = null;
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
-  };
-
-  mainWindow.once('ready-to-show', revealMainWindow);
-
-  // Auto-retry if initial page load encounters temporary connection refusal while backend boots
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-    console.log(`[AimPointAI Desktop] Load note (${errorCode}: ${errorDescription}), retrying connection...`);
+    console.log(`[AimPointAI Desktop] Connecting to backend (${errorCode}: ${errorDescription})...`);
     setTimeout(() => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.loadURL(SERVER_URL).catch(() => {});
       }
-    }, 1500);
+    }, 1000);
   });
-
-  // Safety fallback: Never leave the user stuck with an invisible window or lingering splash screen
-  setTimeout(revealMainWindow, 6000);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -228,36 +190,19 @@ ipcMain.on('window-close', () => { if (mainWindow) mainWindow.close(); });
 
 // Application Lifecycle
 app.whenReady().then(() => {
-  createSplashWindow();
+  createMainWindow();
 
-  // Check if server is already running before spawning a new python process
+  // Ensure backend is running
   const checkReq = http.get(`${SERVER_URL}/api/health`, (res) => {
     if (res.statusCode === 200) {
-      console.log('[AimPointAI Desktop] Existing Python backend detected on port 8080.');
-      createMainWindow();
+      console.log('[AimPointAI Desktop] Python backend active on port 8080.');
     } else {
       startPythonBackend();
-      waitForServer((isReady) => {
-        if (isReady) {
-          console.log('[AimPointAI Desktop] Server live! Launching main window...');
-        } else {
-          console.error('[AimPointAI Desktop] Failed to connect to local server in time.');
-        }
-        createMainWindow();
-      });
     }
   });
 
   checkReq.on('error', () => {
     startPythonBackend();
-    waitForServer((isReady) => {
-      if (isReady) {
-        console.log('[AimPointAI Desktop] Server live! Launching main window...');
-      } else {
-        console.error('[AimPointAI Desktop] Failed to connect to local server in time.');
-      }
-      createMainWindow();
-    });
   });
 
   checkReq.setTimeout(1000, () => {

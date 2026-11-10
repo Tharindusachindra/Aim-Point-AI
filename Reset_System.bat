@@ -26,3 +26,4 @@ echo   - AimPointAI-Desktop.bat
 echo   - AimPointAI-Standalone.bat
 echo.
 pause
+
