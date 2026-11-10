@@ -49,23 +49,41 @@ function getPythonPath() {
     path.join(rootDir, '.venv', 'Scripts', 'python.exe'),
     path.join(rootDir, 'venv', 'Scripts', 'python.exe'),
     path.join(rootDir, '..', '..', '..', '.venv', 'Scripts', 'python.exe'),
-    process.env.PYTHON_PATH,
-    'python'
+    path.join(rootDir, '..', '..', '..', '..', '.venv', 'Scripts', 'python.exe'),
+    'C:\\Users\\CHAMA COMPUTERS\\Desktop\\Aim point AI\\.venv\\Scripts\\python.exe',
+    process.env.PYTHON_PATH
   ];
 
   for (const p of possiblePaths) {
-    if (p && (p === 'python' || fs.existsSync(p))) {
+    if (p && fs.existsSync(p)) {
       return p;
     }
   }
   return 'python';
 }
 
+function getServerScriptPath() {
+  const rootDir = path.join(__dirname, '..');
+  const possibleScripts = [
+    path.join(rootDir, 'start_server.py'),
+    path.join(__dirname, '..', 'start_server.py'),
+    path.join(rootDir, '..', '..', '..', 'start_server.py'),
+    'C:\\Users\\CHAMA COMPUTERS\\Desktop\\Aim point AI\\start_server.py'
+  ];
+
+  for (const s of possibleScripts) {
+    if (s && fs.existsSync(s)) {
+      return s;
+    }
+  }
+  return path.join(rootDir, 'start_server.py');
+}
+
 // 2. Start Local FastAPI Backend
 function startPythonBackend() {
   const pythonPath = getPythonPath();
-  const scriptPath = path.join(__dirname, '..', 'start_server.py');
-  const workingDir = path.join(__dirname, '..');
+  const scriptPath = getServerScriptPath();
+  const workingDir = path.dirname(scriptPath);
 
   console.log(`[AimPointAI Desktop] Starting Python Backend with: ${pythonPath}`);
 
@@ -165,14 +183,34 @@ function createMainWindow() {
 
   mainWindow.loadURL(SERVER_URL);
 
-  mainWindow.once('ready-to-show', () => {
+  let showTriggered = false;
+  const revealMainWindow = () => {
+    if (showTriggered) return;
+    showTriggered = true;
     if (splashWindow && !splashWindow.isDestroyed()) {
       splashWindow.close();
       splashWindow = null;
     }
-    mainWindow.show();
-    mainWindow.focus();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  };
+
+  mainWindow.once('ready-to-show', revealMainWindow);
+
+  // Auto-retry if initial page load encounters temporary connection refusal while backend boots
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.log(`[AimPointAI Desktop] Load note (${errorCode}: ${errorDescription}), retrying connection...`);
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.loadURL(SERVER_URL).catch(() => {});
+      }
+    }, 1500);
   });
+
+  // Safety fallback: Never leave the user stuck with an invisible window or lingering splash screen
+  setTimeout(revealMainWindow, 6000);
 
   mainWindow.on('closed', () => {
     mainWindow = null;

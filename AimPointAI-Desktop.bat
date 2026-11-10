@@ -10,7 +10,6 @@ echo    AimPointAI - Real-Time Basketball Kinematics Desktop Application
 echo    Department of Computer Science, General Sir John Kotelawala Defence University
 echo ======================================================================
 echo.
-echo [1/2] Ensuring Python AI & Biomechanics Server is Running...
 
 set "PY_CMD=python"
 if exist "%~dp0.venv\Scripts\python.exe" (
@@ -19,20 +18,47 @@ if exist "%~dp0.venv\Scripts\python.exe" (
     set "PY_CMD=%~dp0venv\Scripts\python.exe"
 )
 
-REM Start server in background if not already running on port 8080
-netstat -ano | findstr :8080 >nul
+echo [1/3] Clearing stale background locks...
+taskkill /f /im AimPointAI.exe 2>nul
+
+echo [2/3] Checking AI Biomechanics Server on port 8080...
+powershell -NoProfile -Command "
+    $portOpen = $false;
+    try {
+        $res = Invoke-WebRequest -Uri 'http://127.0.0.1:8080/api/health' -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop;
+        if ($res.StatusCode -eq 200) { $portOpen = $true; }
+    } catch { }
+    if (-not $portOpen) { exit 1; } else { exit 0; }
+" >nul 2>&1
+
 if %errorlevel% neq 0 (
+    echo     Starting Python AI Engine in background...
     start "AimPointAI Server" /min "%PY_CMD%" start_server.py
-    timeout /t 3 /nobreak >nul
+    
+    REM Wait up to 15 seconds for backend to become healthy
+    powershell -NoProfile -Command "
+        $attempts = 0;
+        while ($attempts -lt 15) {
+            Start-Sleep -Seconds 1;
+            $attempts++;
+            try {
+                $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8080/api/health' -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop;
+                if ($r.StatusCode -eq 200) { exit 0; }
+            } catch { }
+        }
+        exit 1;
+    " >nul 2>&1
 )
 
-echo [2/2] Launching Native Desktop Electron Window...
+echo [3/3] Launching Native Desktop Window...
 if exist "%~dp0node_modules\electron\dist\electron.exe" (
     start "" "%~dp0node_modules\electron\dist\electron.exe" "%~dp0."
+) else if exist "%~dp0dist\AimPointAI-win32-x64\AimPointAI.exe" (
+    start "" "%~dp0dist\AimPointAI-win32-x64\AimPointAI.exe"
 ) else (
     start "" npx electron .
 )
 
 echo.
-echo AimPointAI Desktop App launched successfully.
-
+echo AimPointAI Desktop Engine initialized successfully.
+timeout /t 3 /nobreak >nul
