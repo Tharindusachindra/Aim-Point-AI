@@ -2098,6 +2098,97 @@
       }
     }
 
+    // Extract Real 33-point Pose Landmarks Frame-by-Frame from Uploaded Video using MediaPipe
+    async function extractLandmarksFromVideo(file) {
+      return new Promise(async (resolve) => {
+        try {
+          if (!mediaPipePose) {
+            setupMediaPipePose();
+          }
+          if (!mediaPipePose) {
+            resolve(null);
+            return;
+          }
+
+          const videoEl = document.getElementById('webcamVideo');
+          if (!videoEl) {
+            resolve(null);
+            return;
+          }
+
+          if (cameraStream) {
+            cameraStream.getTracks().forEach(t => t.stop());
+            cameraStream = null;
+          }
+
+          const videoUrl = URL.createObjectURL(file);
+          videoEl.srcObject = null;
+          videoEl.src = videoUrl;
+          videoEl.muted = true;
+          videoEl.playsInline = true;
+          videoEl.classList.remove('hidden');
+          videoEl.classList.remove('scale-x-[-1]');
+
+          await new Promise((r) => {
+            if (videoEl.readyState >= 1) return r();
+            videoEl.onloadedmetadata = r;
+            setTimeout(r, 2000);
+          });
+
+          const duration = videoEl.duration || 2.0;
+          const numFrames = 30;
+          const step = duration > 0 ? (duration / (numFrames + 1)) : 0.05;
+          const collectedFrames = [];
+          let isDone = false;
+
+          const finishExtraction = () => {
+            if (!isDone) {
+              isDone = true;
+              mediaPipePose.onResults(onMediaPipeResults);
+              resolve(collectedFrames.length >= 5 ? collectedFrames : null);
+            }
+          };
+
+          const safetyTimer = setTimeout(finishExtraction, 15000);
+
+          mediaPipePose.onResults((res) => {
+            if (res && res.poseLandmarks && res.poseLandmarks.length === 33) {
+              const lms = res.poseLandmarks;
+              const frameArr = lms.map(p => [(p.x * 2 - 1), (p.y * 2 - 1), (p.z || 0)]);
+              collectedFrames.push(frameArr);
+            }
+          });
+
+          for (let i = 1; i <= numFrames; i++) {
+            if (isDone) break;
+            const targetTime = Math.min(duration - 0.05, i * step);
+            videoEl.currentTime = targetTime;
+            await new Promise((r) => {
+              videoEl.onseeked = () => r();
+              setTimeout(r, 250);
+            });
+
+            try {
+              await mediaPipePose.send({ image: videoEl });
+            } catch (e) {
+              console.warn("MediaPipe video frame notice:", e);
+            }
+
+            const labelEl = document.getElementById('countdownLabel');
+            if (labelEl) {
+              labelEl.innerText = `ANALYZING VIDEO SKELETON: ${i} / ${numFrames}...`;
+            }
+          }
+
+          clearTimeout(safetyTimer);
+          finishExtraction();
+        } catch (err) {
+          console.warn("Video landmark extraction error:", err);
+          resolve(null);
+        }
+      });
+    }
+
     async function handleFileUpload(event) {
       const file = event.target && event.target.files ? event.target.files[0] : null;
       if (!file) return;
@@ -2105,35 +2196,37 @@
       const overlay = document.getElementById('countdownOverlay');
       const numEl = document.getElementById('countdownNumber');
       const labelEl = document.getElementById('countdownLabel');
+      const statusPill = document.getElementById('telemetry-status');
+
+      if (statusPill) {
+        statusPill.innerText = `Ingesting: ${file.name}`;
+        statusPill.className = "text-kinetic-cyan font-semibold animate-pulse";
+      }
 
       if (overlay) overlay.classList.remove('hidden');
       if (numEl) {
         numEl.innerText = "ANALYZING";
         numEl.className = "text-3xl md:text-5xl font-extrabold font-display text-kinetic-teal animate-pulse";
       }
-      if (labelEl) labelEl.innerText = "EXTRACTING SKELETAL JOINTS & ANALYZING VIDEO...";
+      if (labelEl) labelEl.innerText = "EXTRACTING SKELETAL JOINTS FROM VIDEO...";
 
-      // Preview uploaded video in the canvas stage
-      const videoEl = document.getElementById('webcamVideo');
-      if (videoEl) {
-        try {
-          if (cameraStream) {
-            cameraStream.getTracks().forEach(t => t.stop());
-            cameraStream = null;
-          }
-          videoEl.srcObject = null;
-          videoEl.src = URL.createObjectURL(file);
-          videoEl.classList.remove('hidden');
-          videoEl.classList.remove('scale-x-[-1]');
-          videoEl.play().catch(() => {});
-        } catch (e) {
-          console.warn("Video preview warning:", e);
-        }
+      // 1. Run MediaPipe Pose on the actual uploaded video frames
+      let extractedLandmarks = null;
+      try {
+        extractedLandmarks = await extractLandmarksFromVideo(file);
+      } catch (e) {
+        console.warn("Video pose extraction note:", e);
       }
+
+      if (labelEl) labelEl.innerText = "EVALUATING RES-TCN + BILSTM KINEMATIC MODEL...";
 
       const formData = new FormData();
       formData.append('video', file);
       formData.append('athlete_id', 'ATH-001');
+
+      if (extractedLandmarks && extractedLandmarks.length >= 5) {
+        formData.append('landmarks_json', JSON.stringify(extractedLandmarks));
+      }
 
       try {
         const res = await fetch('/api/analyze-shot', {
@@ -2149,6 +2242,14 @@
           updateUIWithResults(data);
           switchTab('analyzer');
           document.getElementById('faultTitle').scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+          const videoEl = document.getElementById('webcamVideo');
+          if (videoEl) {
+            videoEl.currentTime = 0;
+            videoEl.loop = true;
+            videoEl.play().catch(() => {});
+          }
+          if (!isPlaying) togglePlayback();
         }
       } catch (err) {
         console.error('File upload analysis error:', err);
