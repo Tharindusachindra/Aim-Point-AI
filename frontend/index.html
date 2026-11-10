@@ -2040,7 +2040,7 @@
       } catch (err) {
         console.error("Shot capture inference error:", err);
         overlay.classList.add('hidden');
-        alert("Inference error: " + err.message);
+        alert("Inference Error: " + err.message + "\n\nPlease ensure the Python backend server is running on port 8080 (start_server.py or AimPointAI-Desktop.bat).");
       }
     }
 
@@ -2099,8 +2099,37 @@
     }
 
     async function handleFileUpload(event) {
-      const file = event.target.files[0];
+      const file = event.target && event.target.files ? event.target.files[0] : null;
       if (!file) return;
+
+      const overlay = document.getElementById('countdownOverlay');
+      const numEl = document.getElementById('countdownNumber');
+      const labelEl = document.getElementById('countdownLabel');
+
+      if (overlay) overlay.classList.remove('hidden');
+      if (numEl) {
+        numEl.innerText = "ANALYZING";
+        numEl.className = "text-3xl md:text-5xl font-extrabold font-display text-kinetic-teal animate-pulse";
+      }
+      if (labelEl) labelEl.innerText = "EXTRACTING SKELETAL JOINTS & ANALYZING VIDEO...";
+
+      // Preview uploaded video in the canvas stage
+      const videoEl = document.getElementById('webcamVideo');
+      if (videoEl) {
+        try {
+          if (cameraStream) {
+            cameraStream.getTracks().forEach(t => t.stop());
+            cameraStream = null;
+          }
+          videoEl.srcObject = null;
+          videoEl.src = URL.createObjectURL(file);
+          videoEl.classList.remove('hidden');
+          videoEl.classList.remove('scale-x-[-1]');
+          videoEl.play().catch(() => {});
+        } catch (e) {
+          console.warn("Video preview warning:", e);
+        }
+      }
 
       const formData = new FormData();
       formData.append('video', file);
@@ -2111,7 +2140,11 @@
           method: 'POST',
           body: formData
         });
+        if (!res.ok) {
+          throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+        }
         const data = await res.json();
+        if (overlay) overlay.classList.add('hidden');
         if (data.status === 'success') {
           updateUIWithResults(data);
           switchTab('analyzer');
@@ -2119,6 +2152,8 @@
         }
       } catch (err) {
         console.error('File upload analysis error:', err);
+        if (overlay) overlay.classList.add('hidden');
+        alert("Video Analysis Error: " + err.message + "\n\nPlease ensure the Python backend server is running on port 8080 (start_server.py or AimPointAI-Desktop.bat).");
       }
     }
 
