@@ -1,27 +1,8 @@
-const electron = require('electron');
+const { app, BrowserWindow, session, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
 const fs = require('fs');
-
-// Self-healing: If invoked via Node or with ELECTRON_RUN_AS_NODE=1 (e.g. from VS Code terminal),
-// require('electron') resolves to an executable path string. Re-spawn cleanly under Electron runtime.
-if (typeof electron === 'string') {
-  const env = { ...process.env };
-  delete env.ELECTRON_RUN_AS_NODE;
-  const child = spawn(electron, [path.join(__dirname, '..')], {
-    stdio: 'inherit',
-    env,
-    windowsHide: false
-  });
-  child.on('close', (code) => process.exit(code || 0));
-  return;
-}
-
-const { app, BrowserWindow, session, ipcMain } = electron;
-
-// Suppress Chromium GPU disk cache locks on Windows
-app.commandLine.appendSwitch('disable-gpu-cache');
 
 let mainWindow = null;
 let splashWindow = null;
@@ -29,61 +10,29 @@ let pythonProcess = null;
 const BACKEND_PORT = 8080;
 const SERVER_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 
-// Enforce single instance lock to avoid port and cache conflicts
-const gotTheLock = app.requestSingleInstanceLock();
-if (!gotTheLock) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
-}
-
 // 1. Locate Local Python Executable
 function getPythonPath() {
   const rootDir = path.join(__dirname, '..');
   const possiblePaths = [
     path.join(rootDir, '.venv', 'Scripts', 'python.exe'),
     path.join(rootDir, 'venv', 'Scripts', 'python.exe'),
-    path.join(rootDir, '..', '..', '..', '.venv', 'Scripts', 'python.exe'),
-    path.join(rootDir, '..', '..', '..', '..', '.venv', 'Scripts', 'python.exe'),
-    'C:\\Users\\CHAMA COMPUTERS\\Desktop\\Aim point AI\\.venv\\Scripts\\python.exe',
-    process.env.PYTHON_PATH
+    process.env.PYTHON_PATH,
+    'python'
   ];
 
   for (const p of possiblePaths) {
-    if (p && fs.existsSync(p)) {
+    if (p && (p === 'python' || fs.existsSync(p))) {
       return p;
     }
   }
   return 'python';
 }
 
-function getServerScriptPath() {
-  const rootDir = path.join(__dirname, '..');
-  const possibleScripts = [
-    path.join(rootDir, 'start_server.py'),
-    path.join(__dirname, '..', 'start_server.py'),
-    path.join(rootDir, '..', '..', '..', 'start_server.py'),
-    'C:\\Users\\CHAMA COMPUTERS\\Desktop\\Aim point AI\\start_server.py'
-  ];
-
-  for (const s of possibleScripts) {
-    if (s && fs.existsSync(s)) {
-      return s;
-    }
-  }
-  return path.join(rootDir, 'start_server.py');
-}
-
 // 2. Start Local FastAPI Backend
 function startPythonBackend() {
   const pythonPath = getPythonPath();
-  const scriptPath = getServerScriptPath();
-  const workingDir = path.dirname(scriptPath);
+  const scriptPath = path.join(__dirname, '..', 'start_server.py');
+  const workingDir = path.join(__dirname, '..');
 
   console.log(`[AimPointAI Desktop] Starting Python Backend with: ${pythonPath}`);
 
@@ -107,50 +56,57 @@ function startPythonBackend() {
 }
 
 // 3. Poll Server Until Live
-function waitForServer(callback, maxAttempts = 60) {
+function waitForServer(callback, maxAttempts = 30) {
   let attempts = 0;
-  let resolved = false;
   const interval = setInterval(() => {
     attempts++;
-    const req = http.get(`${SERVER_URL}/api/health`, (res) => {
-      if (!resolved && (res.statusCode === 200 || res.statusCode === 404)) {
-        resolved = true;
+    const req = http.get(SERVER_URL, (res) => {
+      if (res.statusCode === 200 || res.statusCode === 404) {
         clearInterval(interval);
         callback(true);
       }
     });
 
     req.on('error', () => {
-      if (!resolved && attempts >= maxAttempts) {
-        resolved = true;
+      if (attempts >= maxAttempts) {
         clearInterval(interval);
         callback(false);
       }
-    });
-
-    req.setTimeout(1000, () => {
-      req.destroy();
     });
 
     req.end();
   }, 500);
 }
 
-// 4. Create Main Native Desktop Window
-function createMainWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.focus();
-    return;
-  }
+// 4. Create Sleek Splash Screen
+function createSplashWindow() {
+  splashWindow = new BrowserWindow({
+    width: 520,
+    height: 360,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    show: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
 
+  splashWindow.loadFile(path.join(__dirname, 'splash.html'));
+}
+
+// 5. Create Main Native Desktop Window
+function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
     minWidth: 1080,
     minHeight: 720,
-    show: true,
-    backgroundColor: '#070A12',
-    title: 'AimPointAI - Basketball Biomechanics & Shooting Form Correction',
+    show: false,
+    backgroundColor: '#060608',
+    title: 'AimPoint Motion — Desktop Basketball Biomechanics Studio',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -160,18 +116,26 @@ function createMainWindow() {
 
   // Auto-grant Camera / Webcam permissions for seamless monocular capture
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    callback(true);
+    if (permission === 'media' || permission === 'camera' || permission === 'microphone') {
+      callback(true);
+    } else {
+      callback(true);
+    }
   });
 
-  mainWindow.loadURL(SERVER_URL);
+  // Load with cache-busting query + no-cache headers so UI updates always appear immediately
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.loadURL(`${SERVER_URL}/?desktop=${Date.now()}`, {
+    extraHeaders: 'pragma: no-cache\ncache-control: no-cache\n'
+  });
 
-  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-    console.log(`[AimPointAI Desktop] Connecting to backend (${errorCode}: ${errorDescription})...`);
-    setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.loadURL(SERVER_URL).catch(() => {});
-      }
-    }, 1000);
+  mainWindow.once('ready-to-show', () => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.close();
+      splashWindow = null;
+    }
+    mainWindow.show();
+    mainWindow.focus();
   });
 
   mainWindow.on('closed', () => {
@@ -188,27 +152,38 @@ ipcMain.on('window-maximize', () => {
 });
 ipcMain.on('window-close', () => { if (mainWindow) mainWindow.close(); });
 
+function isServerHealthy() {
+  return new Promise((resolve) => {
+    const req = http.get(`${SERVER_URL}/api/health`, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.setTimeout(800, () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
 // Application Lifecycle
-app.whenReady().then(() => {
-  createMainWindow();
+app.whenReady().then(async () => {
+  try {
+    await session.defaultSession.clearCache();
+  } catch (e) {}
 
-  // Ensure backend is running
-  const checkReq = http.get(`${SERVER_URL}/api/health`, (res) => {
-    if (res.statusCode === 200) {
-      console.log('[AimPointAI Desktop] Python backend active on port 8080.');
-    } else {
-      startPythonBackend();
-    }
-  });
-
-  checkReq.on('error', () => {
+  createSplashWindow();
+  const alreadyUp = await isServerHealthy();
+  if (alreadyUp) {
+    console.log('[AimPointAI Desktop] Existing backend detected on port 8080.');
+    createMainWindow();
+  } else {
     startPythonBackend();
-  });
-
-  checkReq.setTimeout(1000, () => {
-    checkReq.destroy();
-  });
-  checkReq.end();
+    waitForServer(() => {
+      console.log('[AimPointAI Desktop] Server live! Launching main window...');
+      createMainWindow();
+    });
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();

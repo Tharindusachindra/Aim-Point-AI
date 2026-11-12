@@ -33,6 +33,7 @@ scratch/
 Thumbs.db
 
 
-# Node / Electron
+# Node / Electron / Expo
 node_modules/
 package-lock.json
+.expo/

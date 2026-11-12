@@ -10,28 +10,39 @@ import time
 import json
 import logging
 import numpy as np
-from typing import Dict, Any, List, Optional
+from typing import Optional
 from pydantic import BaseModel
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger("AimPointAI")
 
-# Ensure backend root on sys.path
+# Ensure both project root and backend root are on sys.path
 backend_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(backend_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
 try:
-    from backend.pose.kinematic_calculator import KinematicFeatureExtractor, FAULT_CLASSES
+    from backend.pose.kinematic_calculator import (
+        KinematicFeatureExtractor,
+        FAULT_CLASSES,
+        identify_biomechanical_frames,
+    )
     from backend.model.architecture import classifier_engine
     from backend.ontology.pedagogical_engine import pedagogical_engine
     from backend.database.database_service import db_service
 except ImportError:
-    from pose.kinematic_calculator import KinematicFeatureExtractor, FAULT_CLASSES  # type: ignore
+    from pose.kinematic_calculator import (  # type: ignore
+        KinematicFeatureExtractor,
+        FAULT_CLASSES,
+        identify_biomechanical_frames,
+    )
     from model.architecture import classifier_engine  # type: ignore
     from ontology.pedagogical_engine import pedagogical_engine  # type: ignore
     from database.database_service import db_service  # type: ignore
@@ -61,10 +72,14 @@ class ShotAnalysisRequest(BaseModel):
     simulation_fault_type: Optional[int] = None # None = auto-detect, 0-4 = benchmark simulate
 
 class AthleteCreateRequest(BaseModel):
-    athlete_id: str
+    athlete_id: Optional[str] = None
     name: str
     position: str = "Guard"
-    team: str = "Varsity Basketball"
+    team: str = "KDU Varsity Basketball"
+    jersey_number: str = "00"
+    height_cm: int = 185
+    age: int = 21
+    shooting_hand: str = "Right"
 
 # -------------------------------------------------------------
 # API Endpoints
@@ -107,20 +122,32 @@ def analyze_shot(
     # Sanitize input types (handles direct function invocation in tests as well as FastAPI forms)
     if not isinstance(athlete_id, str):
         athlete_id = "ATH-001"
-    if not isinstance(benchmark_fault, int):
+    if isinstance(benchmark_fault, bool) or not isinstance(benchmark_fault, int):
         benchmark_fault = None
 
-    # 1. Keypoint Acquisition (Tier 1 & Tier 2)
+    # 1. Keypoint Acquisition & Domain Validation (Tier 1 & Tier 2)
     if isinstance(landmarks_json, str) and landmarks_json.strip():
         try:
             parsed = json.loads(landmarks_json)
-            arr = np.array(parsed, dtype=np.float32)
-            if arr.ndim == 3 and arr.shape[1] == 33:
+            arr = np.nan_to_num(np.array(parsed, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+            if arr.ndim == 3 and arr.shape[1] == 33 and arr.shape[0] >= 1:
                 if arr.shape[2] == 2:
                     z = np.zeros((arr.shape[0], 33, 1), dtype=np.float32)
                     arr = np.concatenate([arr, z], axis=2)
                 T_in = arr.shape[0]
-                if T_in != 60 and T_in > 1:
+                if T_in >= 5:
+                    wr_r_y = arr[:, 16, 1]
+                    wr_l_y = arr[:, 15, 1]
+                    wr_span = max(float(np.ptp(wr_r_y)), float(np.ptp(wr_l_y)))
+                    joint_spread = float(np.max(np.ptp(arr[:, :, :2], axis=0)))
+                    if wr_span < 0.015 and joint_spread < 0.02:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Error Video: Static or non-basketball clip detected with no shooting motion."
+                        )
+                if T_in == 1:
+                    raw_landmarks = np.repeat(arr, 60, axis=0)
+                elif T_in != 60:
                     orig_t = np.linspace(0, 1, T_in)
                     target_t = np.linspace(0, 1, 60)
                     resampled = np.zeros((60, 33, 3), dtype=np.float32)
@@ -131,14 +158,39 @@ def analyze_shot(
                 else:
                     raw_landmarks = arr
             else:
-                raw_landmarks = extractor.generate_synthetic_shot_landmarks(fault_type=0)
+                raise HTTPException(
+                    status_code=400,
+                    detail="Error Video: Invalid pose sequence format. Please upload a basketball shooting video."
+                )
+        except HTTPException:
+            raise
         except Exception as e:
             logger.warning(f"Failed to parse live landmarks: {e}")
-            raw_landmarks = extractor.generate_synthetic_shot_landmarks(fault_type=0)
+            raise HTTPException(
+                status_code=400,
+                detail="Error Video: Could not validate basketball shooting pose in uploaded clip."
+            )
     elif benchmark_fault is not None and 0 <= benchmark_fault <= 4:
         raw_landmarks = extractor.generate_synthetic_shot_landmarks(fault_type=benchmark_fault)
     elif video is not None:
         video_bytes = video.file.read()
+        if len(video_bytes) < 4096:
+            raise HTTPException(
+                status_code=400,
+                detail="Error Video: File is too small or corrupted to be a valid basketball video."
+            )
+        head = video_bytes[:32]
+        is_valid_container = (
+            b"ftyp" in head
+            or head.startswith(b"\x1a\x45\xdf\xa3")
+            or head.startswith(b"RIFF")
+            or head.startswith(b"OggS")
+        )
+        if not is_valid_container:
+            raise HTTPException(
+                status_code=400,
+                detail="Error Video: Unsupported or unrelated file. Please upload a valid MP4/MOV/WebM shooting clip."
+            )
         file_hash = sum(video_bytes[:min(1024, len(video_bytes))])
         fault_seed = file_hash % 5
         raw_landmarks = extractor.generate_synthetic_shot_landmarks(fault_type=fault_seed)
@@ -158,8 +210,14 @@ def analyze_shot(
 
     inference_latency_ms = int((time.perf_counter() - start_time) * 1000)
 
+    T = raw_landmarks.shape[0]
+    biomechanical_frames = identify_biomechanical_frames(kinematics, T=T)
+    release_frame = next((f for f in biomechanical_frames if f["id"] == "release"), None)
+    rel_raw = int(release_frame["raw_frame"]) if release_frame else int(T * 0.5)
+    release_angle = float(np.max(kinematics["release_angles"][rel_raw:])) if rel_raw < T else float(kinematics["release_angles"][-1])
+    checkpoint_audits = pedagogical_engine.audit_all_checkpoints(kinematics, release_angle)
+
     # 5. Commit to Local SQLite Persistence Layer (Tier 5)
-    release_angle = float(kinematics["release_angles"][-1])
     session_id, card_id = db_service.insert_session(
         athlete_id=athlete_id,
         duration_ms=2000,
@@ -170,10 +228,9 @@ def analyze_shot(
     )
 
     # 6. Generate 2D Skeletal Wireframe with Joint Highlights for Visual Overlay (Tier 5)
-    # Returns normalized (x, y) joint coordinates per frame with color cues:
-    # green = optimal execution, red = faulty joint (e.g. elbow for low elbow, trunk for imbalanced base)
+    # Returns normalized (x, y, z) joint coordinates per frame with color cues:
+    # cyan = optimal execution, crimson = faulty joint
     wireframes = []
-    T = raw_landmarks.shape[0]
     
     for t in range(0, T, 2): # Subsample 30 frames for lightweight mobile/web playback
         frame_lms = raw_landmarks[t]
@@ -220,9 +277,13 @@ def analyze_shot(
         "trunk_tilt": [round(float(v), 1) for v in kinematics["trunk_tilt"]]
     }
 
+    ath_row = db_service.get_athlete(athlete_id)
     return {
         "status": "success",
         "session_id": session_id,
+        "athlete_id": athlete_id,
+        "athlete_name": ath_row["name"] if ath_row else athlete_id,
+        "video_name": video_filename,
         "coaching_card": {
             "card_id": card_id,
             "primary_fault": coaching_card.fault_name,
@@ -244,8 +305,11 @@ def analyze_shot(
             "min_elbow_angle": round(float(np.min(kinematics["elbow_angles"])), 1),
             "ideal_elbow_angle": 88.5,
             "max_trunk_tilt": round(float(np.max(kinematics["trunk_tilt"])), 1),
-            "ideal_trunk_tilt": 25.5
+            "ideal_trunk_tilt": 25.5,
+            "min_knee_angle": round(float(np.min(kinematics["knee_angles"])), 1)
         },
+        "biomechanical_frames": biomechanical_frames,
+        "checkpoint_audits": checkpoint_audits,
         "probabilities": {FAULT_CLASSES[i]: round(float(probabilities[i]) * 100, 1) for i in range(5)},
         "wireframes": wireframes,
         "velocity_curve": velocity_curve,
@@ -254,15 +318,16 @@ def analyze_shot(
     }
 
 @app.get("/api/coach/analytics")
-def get_coach_analytics():
+def get_coach_analytics(athlete_id: Optional[str] = None):
     """
-    Web Companion Coach Analytics API Endpoint
+    Web Companion Coach Analytics API Endpoint (supports team-wide or per-sportsman filter)
     Thesis Section 4.8.3 (app.py) & Figure 4.14 / 4.15
     """
-    data = db_service.get_coach_analytics()
+    data = db_service.get_coach_analytics(athlete_id=athlete_id)
     return {
         "status": "success",
         "metrics": data["metrics"],
+        "selectedAthlete": data.get("selectedAthlete"),
         "faultDistribution": data["faultDistribution"],
         "athletes": data["athletes"],
         "recentSessions": data["recentSessions"]
@@ -271,6 +336,32 @@ def get_coach_analytics():
 @app.get("/api/athletes")
 def list_athletes():
     return {"status": "success", "athletes": db_service.get_all_athletes()}
+
+@app.post("/api/athletes")
+def create_athlete(req: AthleteCreateRequest):
+    """Register a new sportsman profile in SQLite for tagged shot uploads and analytics."""
+    try:
+        athlete = db_service.create_athlete(
+            name=req.name,
+            position=req.position,
+            team=req.team,
+            jersey_number=req.jersey_number,
+            height_cm=req.height_cm,
+            age=req.age,
+            shooting_hand=req.shooting_hand,
+            athlete_id=req.athlete_id,
+        )
+        return {"status": "success", "athlete": athlete}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+@app.get("/api/athletes/{athlete_id}/analytics")
+def get_athlete_analytics_endpoint(athlete_id: str):
+    """Per-sportsman cumulative biomechanics analytics, fault distribution, and uploaded videos."""
+    data = db_service.get_athlete_analytics(athlete_id)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Sportsman '{athlete_id}' not found")
+    return {"status": "success", **data}
 
 @app.get("/api/drills")
 def list_drills():
@@ -288,11 +379,11 @@ def list_drills():
     }
 
 @app.get("/api/reports/list")
-def list_recent_reports():
-    """Lists recent shot reports for one-by-one inspection."""
+def list_recent_reports(athlete_id: Optional[str] = None):
+    """Lists recent shot reports for one-by-one inspection (optionally filtered by athlete_id)."""
     return {
         "status": "success",
-        "reports": db_service.get_recent_reports_list()
+        "reports": db_service.get_recent_reports_list(athlete_id=athlete_id)
     }
 
 @app.get("/api/report/{session_id}")
@@ -306,20 +397,114 @@ def get_individual_report(session_id: str):
         "report": report
     }
 
-# Serve the commercial frontend UI & sample videos
+# Serve the commercial frontend UI and playable basketball sample videos
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 if os.path.exists(frontend_dir):
     app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
-sample_videos_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sample_videos")
-if os.path.exists(sample_videos_dir):
-    app.mount("/sample_videos", StaticFiles(directory=sample_videos_dir), name="sample_videos")
+samples_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sample_videos")
+if os.path.exists(samples_dir):
+    app.mount("/samples", StaticFiles(directory=samples_dir), name="samples")
+
+@app.get("/api/samples")
+def list_sample_videos():
+    """Lists all available basketball sample videos grouped across real_5, 3d_10, and 2d_100."""
+    if not os.path.exists(samples_dir):
+        return {"total": 0, "counts": {}, "samples": []}
+
+    categories = [
+        ("real_5", "Real Court Videos (5)"),
+        ("3d_10", "3D Camera Videos (10)"),
+        ("2d_100", "2D Moving-Sticks Models (100)"),
+    ]
+    items = []
+    counts = {}
+
+    for cat_dir, cat_label in categories:
+        sub_path = os.path.join(samples_dir, cat_dir)
+        if not os.path.exists(sub_path):
+            counts[cat_dir] = 0
+            continue
+        files = sorted(
+            f for f in os.listdir(sub_path)
+            if f.lower().endswith((".webm", ".mp4", ".mov")) and os.path.getsize(os.path.join(sub_path, f)) > 0
+        )
+        counts[cat_dir] = len(files)
+        for fname in files:
+            lower = fname.lower()
+            if "low_elbow" in lower:
+                fault_class = "Low Elbow Set Point"
+            elif "short_follow" in lower:
+                fault_class = "Short Follow-Through"
+            elif "imbalanced" in lower:
+                fault_class = "Imbalanced Base"
+            elif "early_release" in lower:
+                fault_class = "Early Release"
+            elif cat_dir == "real_5":
+                fault_class = "Real Human Footage"
+            else:
+                fault_class = "Ideal Form"
+            items.append({
+                "category": cat_dir,
+                "category_label": cat_label,
+                "filename": fname,
+                "fault_class": fault_class,
+                "url": f"/samples/{cat_dir}/{fname}",
+            })
+    return {"total": len(items), "counts": counts, "samples": items}
+
+
+@app.get("/api/dataset/stats")
+def get_llm_dataset_stats():
+    """Returns summary metadata and sample records from the full LLM & RAG coaching dataset."""
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ds_dir = os.path.join(root_dir, "dataset")
+    jsonl_path = os.path.join(ds_dir, "aimpoint_llm_instruct.jsonl")
+    csv_path = os.path.join(ds_dir, "aimpoint_telemetry_features.csv")
+    rag_path = os.path.join(ds_dir, "aimpoint_rag_knowledge_base.json")
+
+    total_records = 0
+    class_dist: dict = {}
+    previews = []
+    if os.path.exists(jsonl_path):
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                total_records += 1
+                obj = json.loads(line)
+                lbl = obj.get("fault_label", "Unknown")
+                class_dist[lbl] = class_dist.get(lbl, 0) + 1
+                if len(previews) < 5 and len(class_dist.get(lbl, 0) if False else previews) < 5:
+                    pass
+                if total_records in (1, 251, 501, 751, 1001):
+                    previews.append(obj)
+
+    return {
+        "status": "ready" if total_records > 0 else "missing",
+        "total_records": total_records,
+        "class_distribution": class_dist,
+        "files": {
+            "instruct_jsonl": os.path.exists(jsonl_path),
+            "telemetry_csv": os.path.exists(csv_path),
+            "rag_kb_json": os.path.exists(rag_path),
+        },
+        "previews": previews,
+    }
 
 @app.get("/")
 def serve_index():
     index_file = os.path.join(frontend_dir, "index.html")
     if os.path.exists(index_file):
-        return FileResponse(index_file)
+        return FileResponse(
+            index_file,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
     return {"message": "AimPointAI API Running. Access /docs for swagger docs."}
 
 if __name__ == "__main__":
