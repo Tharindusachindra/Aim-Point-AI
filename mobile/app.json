@@ -2,6 +2,7 @@
   "expo": {
     "name": "AimPoint Motion",
     "slug": "aimpoint-motion",
+    "owner": "tharindusachindra",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -42,6 +43,11 @@
       ],
       "expo-asset",
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "bc06b99a-29ef-46f1-bff7-20b83c2913ad"
+      }
+    }
   }
 }

@@ -20,4 +20,11 @@ if %errorlevel% neq 0 (
 echo [2/2] Starting Expo Metro Server in mobile\ ...
 cd mobile
 set EXPO_NO_TELEMETRY=1
+call npx expo whoami >nul 2>&1
+if %errorlevel% neq 0 (
+    echo.
+    echo [Tip] iOS Expo Go requires either logging out in the Expo Go phone app
+    echo       OR signing in below as "tharindusachindra":
+    call npx expo login -u tharindusachindra
+)
 npx expo start -c
