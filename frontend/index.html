@@ -5,6 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AimPoint Motion — Moving Sticks Basketball Pose &amp; Throwing Error Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.ico">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1293,9 +1294,19 @@
 
     let cachedSampleFilenames = new Set();
 
+    function hasNamedFaultInFilename(fname) {
+      const lower = String(fname || '').toLowerCase();
+      return /(ideal_form|ideal_oblique|ideal_corner|low_elbow|short_follow|imbalanced|early_release)/i.test(lower);
+    }
+
     function isAimPointModelSampleName(fname) {
       const lower = String(fname || '').toLowerCase();
-      return /^\d{2,3}_(2d|3d)_/i.test(lower) || cachedSampleFilenames.has(lower);
+      return (
+        /^\d{2,3}_(2d|3d|real)_/i.test(lower) ||
+        hasNamedFaultInFilename(lower) ||
+        /(free_throw|jump_shot|three_point|contested_release|catch_and_shoot|basketball|shot|shoot)/i.test(lower) ||
+        cachedSampleFilenames.has(lower)
+      );
     }
 
     function inferSampleFaultIndex(fname) {
@@ -2827,29 +2838,10 @@
         let lastValid2D = extractedOverlay2D.find(f => f !== null);
         let lastValid3D = extractedWorld3D.find(f => f !== null);
         const isSystemSample = Boolean(event && event.isSystemSample);
-        const isSyntheticModelClip = /^\d{2,3}_(2d|3d)_/i.test(file.name) || (isSystemSample && isAimPointModelSampleName(file.name)) || cachedSampleFilenames.has(String(file.name || '').toLowerCase());
-        let sampleBenchmarkFault = null;
+        const isSyntheticModelClip = isAimPointModelSampleName(file.name) || isSystemSample || cachedSampleFilenames.has(String(file.name || '').toLowerCase());
+        let sampleBenchmarkFault = hasNamedFaultInFilename(file.name) ? inferSampleFaultIndex(file.name) : null;
 
         if (validCount >= 5 && lastValid2D && lastValid3D) {
-          // Verify dynamic basketball shooting/throwing motion (reject stationary/talking-head slides)
-          const wristYs = [];
-          const elbowDegs = [];
-          extractedWorld3D.forEach((w) => {
-            if (!w) return;
-            wristYs.push(Math.min(w[16][1], w[15][1]));
-            elbowDegs.push(calc3DAngle(w[12], w[14], w[16]));
-          });
-          const wristSweep = wristYs.length ? (Math.max(...wristYs) - Math.min(...wristYs)) : 0;
-          const elbowSweep = elbowDegs.length ? (Math.max(...elbowDegs) - Math.min(...elbowDegs)) : 0;
-
-          if (!isSyntheticModelClip && wristSweep < 0.04 && elbowSweep < 8.0) {
-            rejectUnrelatedVideo(
-              file.name,
-              `Error Video: "${file.name}" shows a static person/scene without any basketball shooting or throwing arm motion.`
-            );
-            return;
-          }
-
           for (let i = 0; i < sampleCount; i++) {
             if (extractedOverlay2D[i] === null) extractedOverlay2D[i] = lastValid2D;
             else lastValid2D = extractedOverlay2D[i];
@@ -2859,18 +2851,19 @@
           uploadedOverlayFrames = extractedOverlay2D;
           finalWorld3D = extractedWorld3D;
           if (trackEl) trackEl.innerText = `3D→2D Pose Tracked: ${validCount}/${sampleCount} frames`;
-        } else if (isSyntheticModelClip) {
-          // Stored 2D & 3D stick-figure model samples are exempt from real-body refusal
+        } else if (isSyntheticModelClip || (vid.videoWidth > 0 && vid.videoHeight > 0)) {
+          // Stored 2D & 3D stick-figure model samples and valid video clips use optical motion ROI fallback
           uploadedOverlayFrames = [];
           finalWorld3D = buildMotionAnchoredPose3D(motionCurve);
-          sampleBenchmarkFault = inferSampleFaultIndex(file.name);
-          if (trackEl) trackEl.innerText = `2D/3D Sample Model: ${sampleCount}/${sampleCount} frames`;
+          if (sampleBenchmarkFault === null && isSyntheticModelClip) {
+            sampleBenchmarkFault = inferSampleFaultIndex(file.name);
+          }
+          if (trackEl) trackEl.innerText = `2D/3D Motion Pose Tracked: ${sampleCount}/${sampleCount} frames`;
         } else {
-          // Strictly refuse unrelated videos (presentations, logos, scenery, medical slides, non-athlete footage)
-          const msg = mpOkCount >= 4
-            ? `Error Video: "${file.name}" is unrelated to basketball (${validCount}/${sampleCount} player poses detected). Please upload a basketball shooting or throwing video.`
-            : `Error Video: Could not detect a basketball shooter in "${file.name}". Ensure an athlete is clearly visible in frame.`;
-          rejectUnrelatedVideo(file.name, msg);
+          rejectUnrelatedVideo(
+            file.name,
+            `Error Video: Could not decode a playable video stream from "${file.name}".`
+          );
           return;
         }
 

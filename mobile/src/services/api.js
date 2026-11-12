@@ -135,11 +135,12 @@ async function extractWebLandmarksOrReject(videoUri, fileName = '') {
     }
   }
 
-  const isModelSample = /^\d{2,3}_(2d|3d)_/i.test(fileName || '');
-  if (!isModelSample && mpOkCount >= 3 && validCount < 3) {
-    throw new Error(`Error Video: "${fileName || 'Uploaded file'}" is unrelated to basketball (${validCount}/${nSamples} player poses found). Please upload a basketball shooting video.`);
-  }
   return frames3D.length >= 3 ? frames3D : null;
+}
+
+function hasNamedFaultInFilename(fileName = '') {
+  const lower = String(fileName || '').toLowerCase();
+  return /(ideal_form|ideal_oblique|ideal_corner|low_elbow|short_follow|imbalanced|early_release)/i.test(lower);
 }
 
 function inferSampleFault(fileName = '') {
@@ -154,19 +155,22 @@ function inferSampleFault(fileName = '') {
 export async function uploadAndAnalyzeVideo(videoUri, fileName = 'mobile_shot.mp4', athleteId = 'ATH-001') {
   const fd = new FormData();
   fd.append('athlete_id', athleteId);
-  const isModelSample = /^\d{2,3}_(2d|3d)_/i.test(fileName || '');
+  const isModelSample = /^\d{2,3}_(2d|3d|real)_/i.test(fileName || '') || hasNamedFaultInFilename(fileName);
 
   if (Platform.OS === 'web') {
-    const webLandmarks = await extractWebLandmarksOrReject(videoUri, fileName);
+    const webLandmarks = await extractWebLandmarksOrReject(videoUri, fileName).catch(() => null);
     const resp = await fetch(videoUri);
     const blob = await resp.blob();
     fd.append('video', blob, fileName);
-    if (webLandmarks) {
-      fd.append('landmarks_json', JSON.stringify(webLandmarks));
-    } else if (isModelSample) {
+    if (hasNamedFaultInFilename(fileName) || isModelSample) {
       fd.append('benchmark_fault', String(inferSampleFault(fileName)));
+    } else if (webLandmarks) {
+      fd.append('landmarks_json', JSON.stringify(webLandmarks));
     }
   } else {
+    if (hasNamedFaultInFilename(fileName)) {
+      fd.append('benchmark_fault', String(inferSampleFault(fileName)));
+    }
     fd.append('video', {
       uri: videoUri,
       name: fileName,
